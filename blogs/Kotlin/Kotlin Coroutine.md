@@ -12,7 +12,7 @@ Kotlin Coroutine
 2. select
 2. 协程中的并发同步
 2. 协程中的异常
-2. 
+3. 协程中的线程池
 
 #### 启动协程
 
@@ -107,4 +107,14 @@ Kotlin 协程解决并发的两大思路，分别是 Java 思路、协程思路�
 
 6. 使用 CoroutineExceptionHandler 处理复杂结构的协程异常，它仅在顶层协程中起作用。传统的 try-catch 在协程当中并不能解决所有问题，尤其是在协程嵌套层级较深的情况下。Kotlin 官方为我们提供了 CoroutineExceptionHandler 作为补充，有了它，我们可以轻松捕获整个作用域内的所有异常。
 
-#### 
+#### 协程中的线程池
+下面我们来直接观察Kotlin协程的线程池。
+   fun test() {
+        lifecycleScope.launch(Dispatchers.IO) { }
+    }
+
+指定协程运行的线程池我们知道要通过Dispatchers，有：
+
+Main： 即UI线程
+Default： 通常用于执行CPU密集型任务
+IO： 通常用于执行会阻塞线程的任务，比如网络请求，文件读写等
