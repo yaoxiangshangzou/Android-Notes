@@ -18,17 +18,17 @@ Binder 通信模型由四方参与，分别是 Binder 驱动层、Client 端、S
 
 Client 端表示应用程序进程，Service 端表示系统服务，它可能运行在 SystemService 进程，比如 AMS、PKMS等，也可能是运行在一个单独的进程中，比如 SurfaceFlinger。ServiceManager 是 Binder 进程间通信方式的上下文管理者，它提供 Service 端的服务注册和 Client 端的服务获取功能。它们之间是不能直接通信的，需要借助于 Binder 驱动层进行交互。
 
-这就需要它们首先通过 binder_open 打开 binder 驱动，然后根据返回的 fd 进行内存映射，分配缓冲区，最后启动 binder 线程，启动 binder 线程一方面是把这个这些线程注册到 binder 驱动，另一方面是这个线程要进入 binder_loop 循环，不断的去跟 binder 驱动进程交互。
+接下来就可以开始 Binder 通信过程了，我们从 ServiceManager 说起。
 
-接下来就可以开始 binder 通信了，我们从 ServiceManager 说起。
+ServiceManger 的 main 函数首先调用 binder_open 打开 binder 驱动，然后调用 binder_become_context_manager（ 发出BINDER_SET_CONTEXT_MGR 命令） 注册为 binder 的大管家，最后进入 binder_loop 循环。（binder_loop 首先通过 BC_ENTER_LOOPER 命令协议把当前线程注册为 binder 线程，也就是 ServiceManager 的主线程，然后在一个 for 死循环中不断去读 binder 驱动发送来的请求去处理，也就调用 ioctl。）
 
-ServiceManger 的 main 函数首先调用 binder_open 打开 binder 驱动，然后调用 binder_become_context_manager 注册为 binder 的大管家，也就是告诉 Binder 驱动 Service 的注册和获取都是通过我来做的，最后进入 binder_loop 循环。binder_loop 首先通过 BC_ENTER_LOOPER 命令协议把当前线程注册为 binder 线程，也就是 ServiceManager 的主线程，然后在一个 for 死循环中不断去读 binder 驱动发送来的请求去处理，也就调用 ioctl。
-
-有了 ServiceManager 之后，Service 系统服务就可以向 ServiceManager 进行注册了。也 ServiceFlinger 为例，在它的入口函数 main 函数中，首先也需要启动 binder 机制，也就是上所说的那三步，然后就是初始化 ServiceFlinger，最后就是注册服务。注册服务首先需要拿到 ServiceManager 的 Binder 代理对象，也就是通过 defaultServiceManager 方法，真正获取 ServiceManager 代理对象的是通过 getStrongProxyForHandle(0)，也就是查的是句柄值为 0 的 binder 引用，也就是 ServiceManager。如果没查到就说明可能 ServiceManager 还没来得及注册，这个时候 sleep(1) 等等就行了。然后就是调用 addService 来进行注册了。addService 就会把 name 和 binder 对象都写到 Parcel 中，然后就是调用 transact 发送一个 ADD_SERVICE_TRANSACTION 的请求。实际上是调用 IPCThreadState 的 transact 函数，第一个参数是 mHandle 值，也就是说底层在和 binder 驱动进行交互的时候是不区分 BpBinder 还是 BBinder，它只认一个 handle 值。 
+有了 ServiceManager 之后，Service 系统服务就可以向 ServiceManager 进行注册Binder（Server 中的 Binder 实体），表明可以对外提供服务。注册服务首先需要拿到 ServiceManager 的 Binder 代理对象，也就是通过getStrongProxyForHandle(0)，也就是查的是句柄值为 0 的 binder 引用。然后就是调用 addService 来进行注册了。addService 就会把 name 和 binder 对象都写到 Parcel 中，然后就是调用 transact 发送一个 ADD_SERVICE_TRANSACTION 的请求。(实际上是调用 IPCThreadState 的 transact 函数，第一个参数是 mHandle 值，也就是说底层在和 binder 驱动进行交互的时候是不区分 BpBinder 还是 BBinder，它只认一个 handle 值。 )
 
 Binder 驱动就会把这个请求交给 Binder 实体对象去处理，也就是是在 ServiceManager 的 onTransact 函数中处理 ADD_SERVICE_TRANSACTION 请求，也就是根据 handle 值封装一个 BinderProxy 对象，至此，Service 的注册就完成了。
 
-至于 Client 获取服务，其实和这个差不多，也就是拿到服务的 BinderProxy 对象即可。
+至于 Client 获取服务，其实和这个差不多，通过名字，在 Binder 驱动的帮助下从 ServiceManager 中获取到对 Binder 实体的引用，通过这个引用就能实现和 Server 进程的通信。
+
+
 
 在回答的时候，最后可以画一下图：
 
@@ -40,11 +40,11 @@ Binder 驱动就会把这个请求交给 Binder 实体对象去处理，也就�
 
 #### 一次完整的 IPC 通信流程是怎样的？
 
-首先是从应用层的 Proxy 的 transact 函数开始，传递到 Java 层的 BinderProxy，最后到 Native 层的 BpBinder 的 transact。在 BpBinder 的 transact 实际上是调用 IPCThreadState 的 transact 函数，在它的第一个参数是 handle 值，Binder 驱动就会根据这个 handle 找到 Binder 引用对象，继而找到 Binder 实体对象。在这个函数中，做了两件事件，一件是调用 writeTransactionData 向 Binder 驱动发出一个 BC_TRANSACTION 的命令协议，把所需参数写到 mOut 中，第二件是 waitForResponse 等待回复，在它里面才会真正的和 Binder 驱动进行交互，也就是调用 talkWithDriver，然后接收到的响应执行相应的处理。这时候 Client 接收到的是 BR_TRANSACTION_COMPLETE，表示 Binder 驱动已经接收到了 Client 的请求了。在这里面还有一个 cmd 为 BR_REPLY 的返回协议，表示 Binder 驱动已经把响应返回给 Client 端了。在 talkWithDriver 中，是通过系统调用 ioctl 来和 Binder 驱动进行交互的，传递一个 BINDER_WRITE_READ 的命令并且携带一个 binder_write_read 数据结构体。在 Binder 驱动层就会根据 write_size/read_size 处理该 BINDER_WRITE_READ 命令。
+首先是从应用层的 Proxy 的 transact 函数开始，传递到 Java 层的 BinderProxy，最后到 Native 层的 BpBinder 的 transact。在 BpBinder 的 transact 实际上是调用 IPCThreadState 的 transact 函数，在它的第一个参数是 handle 值，Binder 驱动就会根据这个 handle 找到 Binder 引用对象，继而找到 Binder 实体对象。  （在这个函数中，做了两件事件，一件是调用 writeTransactionData 向 Binder 驱动发出一个 BC_TRANSACTION 的命令协议，把所需参数写到 mOut 中，第二件是 waitForResponse 等待回复，在它里面才会真正的和 Binder 驱动进行交互，也就是调用 talkWithDriver，然后接收到的响应执行相应的处理）。   这时候 Client 接收到的是 BR_TRANSACTION_COMPLETE，表示 Binder 驱动已经接收到了 Client 的请求了。在这里面还有一个 cmd 为 BR_REPLY 的返回协议，表示 Binder 驱动已经把响应返回给 Client 端了。（在 talkWithDriver 中，是通过系统调用 ioctl 来和 Binder 驱动进行交互的，传递一个 BINDER_WRITE_READ 的命令并且携带一个 binder_write_read 数据结构体。在 Binder 驱动层就会根据 write_size/read_size 处理该 BINDER_WRITE_READ 命令。）
 
 到这里，已经讲完了 Client 端如何和 Binder 驱动进行交互的了，下面就讲 Service 端是如何和 Binder 驱动进行交互的。
 
-Service 端首先会开启一个 Binder 线程来处理进程间通信请求，也就是通过 new Thread 然后把该线程 joinThreadPool 注册到 Binder 驱动。注册呢也就是通过 BC_ENTER_LOOPER 命令协议来做的，接下来就是在 do while 死循环中调用 getAndExecuteCommand。它里面做的就是不断从驱动读取请求，也就是 talkWithDriver，然后再处理请求 executeCommand。在 executeCommand 中，就会根据 BR_TRANSACTION 来调用 BBinder Binder 实体对象的 onTransact 函数来进行处理，然后在发送一个 BC_REPLY 把响应结构返回给 Binder 驱动。Binder 驱动在接收到 BC_REPLY 之后就会向 Service 发送一个 BR_TRANSACTION_COMPLETE 协议表示 Binder 驱动已经收到了，在此同时呢，也会向 Client 端发送一个 BR_REPLY把响应回写给 Client 端。
+Service 端首先会开启一个 Binder 线程来处理进程间通信请求，也就是通过 new Thread 然后把该线程 joinThreadPool 注册到 Binder 驱动。  （注册呢也就是通过 BC_ENTER_LOOPER 命令协议来做的，接下来就是在 do while 死循环中调用 getAndExecuteCommand。它里面做的就是不断从驱动读取请求，也就是 talkWithDriver，然后再处理请求 executeCommand。在 executeCommand 中，）    就会根据 BR_TRANSACTION 来调用 BBinder Binder 实体对象的 onTransact 函数来进行处理，然后在发送一个 BC_REPLY 把响应结构返回给 Binder 驱动。Binder 驱动在接收到 BC_REPLY 之后就会向 Service 发送一个 BR_TRANSACTION_COMPLETE 协议表示 Binder 驱动已经收到了，在此同时呢，也会向 Client 端发送一个 BR_REPLY把响应回写给 Client 端。
 
 需要注意的是，上面的 onTransact 函数就是 Service 端 AIDL 生成的 Stub 类的 onTransact 函数，这时一次完整的 IPC 通信流程就完成了。
 
