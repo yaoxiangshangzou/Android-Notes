@@ -6,9 +6,9 @@ Binder 系列口水话
 
 1. 谈谈你对 Binder 的理解？
 2. 一次完整的 IPC 通信流程是怎样的？
-3. Binder 对象跨进程传递的原理是怎么样的？
-4. 说一说 Binder 的 oneway 机制
-5. Framework 中其他的 IPC 通信方式 
+3. 说一说 Binder 的 oneway 机制
+4. Framework 中其他的 IPC 通信方式
+5. Binder 对象跨进程传递的原理是怎么样的？
 
 #### 谈谈你对 Binder 的理解？
 
@@ -20,13 +20,13 @@ Client 端表示应用程序进程，Service 端表示系统服务，它可能�
 
 接下来就可以开始 Binder 通信过程了，我们从 ServiceManager 说起。
 
-ServiceManger 的 main 函数首先调用 binder_open 打开 binder 驱动，然后调用 binder_become_context_manager（ 发出BINDER_SET_CONTEXT_MGR 命令） 注册为 binder 的大管家，最后进入 binder_loop 循环。<small>（binder_loop 首先通过 BC_ENTER_LOOPER 命令协议把当前线程注册为 binder 线程，也就是 ServiceManager 的主线程，然后在一个 for 死循环中不断去读 binder 驱动发送来的请求去处理，也就调用 ioctl。）</small>
+ServiceManger 的 main 函数首先调用 binder_open 打开 binder 驱动，然后调用 binder_become_context_manager（ 发出BINDER_SET_CONTEXT_MGR 命令） 注册为 binder 的大管家
 
 有了 ServiceManager 之后，Service 系统服务就可以向 ServiceManager 进行注册Binder（Server 中的 Binder 实体），表明可以对外提供服务。注册服务首先需要拿到 ServiceManager 的 Binder 代理对象，也就是通过getStrongProxyForHandle(0)，也就是查的是句柄值为 0 的 binder 引用。然后就是调用 addService 来进行注册了。addService 就会把 name 和 binder 对象都写到 Parcel 中，然后就是调用 transact 发送一个 ADD_SERVICE_TRANSACTION 的请求。(实际上是调用 IPCThreadState 的 transact 函数，第一个参数是 mHandle 值，也就是说底层在和 binder 驱动进行交互的时候是不区分 BpBinder 还是 BBinder，它只认一个 handle 值。 )
 
-Binder 驱动就会把这个请求交给 Binder 实体对象去处理，也就是是在 ServiceManager 的 onTransact 函数中处理 ADD_SERVICE_TRANSACTION 请求，也就是根据 handle 值封装一个 BinderProxy 对象，至此，Service 的注册就完成了。
+Binder 驱动就会把这个请求交给 Binder 实体对象去处理，也就是在 ServiceManager 的 onTransact 函数中处理 ADD_SERVICE_TRANSACTION 请求，也就是根据 handle 值封装一个 BinderProxy 对象，至此，Service 的注册就完成了。
 
-至于 Client 获取服务，其实和这个差不多，通过名字，在 Binder 驱动的帮助下从 ServiceManager 中获取到对 Binder 实体的引用，通过这个引用就能实现和 Server 进程的通信。
+至于 Client 获取服务，底层流程其实和service注册差不多，整体上是通过名字，在 Binder 驱动的帮助下从 ServiceManager 中获取到对 Binder 实体的引用，通过这个引用就能实现和 Server 进程的通信。
 
 
 
@@ -40,6 +40,8 @@ Binder 驱动就会把这个请求交给 Binder 实体对象去处理，也就�
 
 #### 一次完整的 IPC 通信流程是怎样的？
 
+![IPC_流程](https://github.com/yaoxiangshangzou/Android-Notes/blob/master/images/Android/IPC_%E6%B5%81%E7%A8%8B.png)
+
 首先是从应用层的 Proxy 的 transact 函数开始，传递到 Java 层的 BinderProxy，最后到 Native 层的 BpBinder 的 transact。在 BpBinder 的 transact 实际上是调用 IPCThreadState 的 transact 函数，在它的第一个参数是 handle 值，Binder 驱动就会根据这个 handle 找到 Binder 引用对象，继而找到 Binder 实体对象。  （在这个函数中，做了两件事件，一件是调用 writeTransactionData 向 Binder 驱动发出一个 BC_TRANSACTION 的命令协议，把所需参数写到 mOut 中，第二件是 waitForResponse 等待回复，在它里面才会真正的和 Binder 驱动进行交互，也就是调用 talkWithDriver，然后接收到的响应执行相应的处理）。   这时候 Client 接收到的是 BR_TRANSACTION_COMPLETE，表示 Binder 驱动已经接收到了 Client 的请求了。在这里面还有一个 cmd 为 BR_REPLY 的返回协议，表示 Binder 驱动已经把响应返回给 Client 端了。（在 talkWithDriver 中，是通过系统调用 ioctl 来和 Binder 驱动进行交互的，传递一个 BINDER_WRITE_READ 的命令并且携带一个 binder_write_read 数据结构体。在 Binder 驱动层就会根据 write_size/read_size 处理该 BINDER_WRITE_READ 命令。）
 
 到这里，已经讲完了 Client 端如何和 Binder 驱动进行交互的了，下面就讲 Service 端是如何和 Binder 驱动进行交互的。
@@ -51,6 +53,19 @@ Service 端首先会开启一个 Binder 线程来处理进程间通信请求，�
 最后可画一张图即可：
 
 ![](https://i.loli.net/2020/03/28/1ZbMj2fUiX8BGc7.png)
+
+
+#### Framework IPC 方式汇总
+
+Android 是基于 Linux 内核构建的，Linux 已经提供了很多进程间通信机制，比如有管道、Socket、共享内存、信号等，在 Android Framework 中不仅用到了 Binder，这些 IPC 方式也都有使用到。
+
+首先讲一下管道，管道是半双工的，管道的描述符只能读或写，想要既可以读也可以写就需要两个描述符，而且管道一般是用在父子进程之间的。Linux 提供了 pipe 函数创建一个管道，传入一个 fd[2] 数组，fd[0] 表示读端，fd[1] 表示写端。假如父进程创建了一对文件描述符，fork 出得子进程继承了这对文件描述符，这时候父进程想要往子进程写东西，就可以拿 fd[1] 写，然后子进程在 fd[0] 就可以读到了。在 Android 中，Native 层的 Looper 使用到了管道，它里面使用 epoll 监听读事件（epoll_wait），如果其他进程往里面写东西他就能收到通知。管道在哪写的呢，其实是在 wake 函数中，当别的线程向 Looper 线程发消息并且需要唤醒 Looper 线程的时候就会调用 wake 函数，wake 函数里面呢就是向管道写一个 "W" 字符。管道使用起来还是很方便的，主要是能配合 epoll 机制监听读写事件。这是 Android 19 才会使用到管道，更高版本使用的是 EventFd。
+
+然后就是 Socket，Socket 是全双工的，也就是说既可以读也可以写，而且进程之间不需要亲缘关系，只需要公开一个地址即可。Framewok 中使用到 Socket 最经典的莫过于 Zygote 等待 AMS 请求 fork 应用程序进程了。在 Zygote 的 main 方法中 register 一个 ZygoteSocket，然后进入 runSelectLoop 循环去监听有没有新的连接，如果有的数据发过来就会去调用 runOnce 函数去根据参数 fork 出新的应用程序进程，其实就是去执行 ActivityThread 的 main 函数，然后也会通过这个 Socket 把新创建的应用进程 pid 返回给 Zygote。
+
+接着是共享内存，共享内存它是不需要多次拷贝的，而且特别快。拿到文件描述符分别映射到进程的地址空间即可。在 Android 中提供了 MemoryFile 类，里面封装了 ashmem 机制，也就是 Android 的匿名共享内存。首先通过 ashmem_create_region 创建一块匿名共享内存，返回一个 fd，然后调用 mmap 函数给这个 fd 映射到当前进程地址空间中。
+
+最后就是信号，信号是单向的，而且发出去之后不关心处理结果，知道进程的 pid 就能发信号了。在杀应用进程的时候会调用 Process 的 killProcess 函数发送一个 SIGNAL_KILL 信号。还有 Zygote 在 fork 完成一个新的子进程之后还会监听 SIGCHLD 信号，如果子进程退出之后就会回收相应的资源，避免子进程成为一个僵尸进程。
 
 #### Binder 对象跨进程传递的原理是怎么样的？
 
@@ -75,15 +90,3 @@ OneWay 就是异步 binder 调用，带 ONEWAY 的 waitForResponse 参数为 nul
 对于系统服务来说，一般都是 oneway 的，比如在启动 Activity 时，它是异步的，不会阻塞系统服务，但是在 Service 端，它是串行化的，都是放在进程的 todo 队列里面一个一个的进行分发处理。
 
 ![](https://i.loli.net/2020/03/28/8ENCcGDdYVlUKQm.png)
-
-#### Framework IPC 方式汇总
-
-Android 是基于 Linux 内核构建的，Linux 已经提供了很多进程间通信机制，比如有管道、Socket、共享内存、信号等，在 Android Framework 中不仅用到了 Binder，这些 IPC 方式也都有使用到。
-
-首先讲一下管道，管道是半双工的，管道的描述符只能读或写，想要既可以读也可以写就需要两个描述符，而且管道一般是用在父子进程之间的。Linux 提供了 pipe 函数创建一个管道，传入一个 fd[2] 数组，fd[0] 表示读端，fd[1] 表示写端。假如父进程创建了一对文件描述符，fork 出得子进程继承了这对文件描述符，这时候父进程想要往子进程写东西，就可以拿 fd[1] 写，然后子进程在 fd[0] 就可以读到了。在 Android 中，Native 层的 Looper 使用到了管道，它里面使用 epoll 监听读事件（epoll_wait），如果其他进程往里面写东西他就能收到通知。管道在哪写的呢，其实是在 wake 函数中，当别的线程向 Looper 线程发消息并且需要唤醒 Looper 线程的时候就会调用 wake 函数，wake 函数里面呢就是向管道写一个 "W" 字符。管道使用起来还是很方便的，主要是能配合 epoll 机制监听读写事件。这是 Android 19 才会使用到管道，更高版本使用的是 EventFd。
-
-然后就是 Socket，Socket 是全双工的，也就是说既可以读也可以写，而且进程之间不需要亲缘关系，只需要公开一个地址即可。Framewok 中使用到 Socket 最经典的莫过于 Zygote 等待 AMS 请求 fork 应用程序进程了。在 Zygote 的 main 方法中 register 一个 ZygoteSocket，然后进入 runSelectLoop 循环去监听有没有新的连接，如果有的数据发过来就会去调用 runOnce 函数去根据参数 fork 出新的应用程序进程，其实就是去执行 ActivityThread 的 main 函数，然后也会通过这个 Socket 把新创建的应用进程 pid 返回给 Zygote。
-
-接着是共享内存，共享内存它是不需要多次拷贝的，而且特别快。拿到文件描述符分别映射到进程的地址空间即可。在 Android 中提供了 MemoryFile 类，里面封装了 ashmem 机制，也就是 Android 的匿名共享内存。首先通过 ashmem_create_region 创建一块匿名共享内存，返回一个 fd，然后调用 mmap 函数给这个 fd 映射到当前进程地址空间中。
-
-最后就是信号，信号是单向的，而且发出去之后不关心处理结果，知道进程的 pid 就能发信号了。在杀应用进程的时候会调用 Process 的 killProcess 函数发送一个 SIGNAL_KILL 信号。还有 Zygote 在 fork 完成一个新的子进程之后还会监听 SIGCHLD 信号，如果子进程退出之后就会回收相应的资源，避免子进程成为一个僵尸进程。
