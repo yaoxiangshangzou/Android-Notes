@@ -11,12 +11,16 @@ View 体系相关口水话
 
 #### View 绘制流程
 
-addView流程  
+##### addView流程  
   
 View 的显示是以 Activity 为载体的，Activity 是在 ActivityThread 的 performLaunchActivity 中进行创建的，在创建完成之后就会调用其 attach 方法，attach 方法所做的就是 new 一个 PhoneWindow 并关联 WindowManager。接下来就是 onCreate 方法，这一步就是把我们的布局文件解析成 View 塞到 DecorView 里的 mContentView 中。然后在 handleResumeActivity 中，通过 WindowManagerImpl 的 addView 方法把 DecorView 添加进去，实际实现是 WindowManagerGlobal 的 addView 方法，它里面管理着所有的 DecorView 及其对应的 ViewRootImpl，ViewRootImpl 是 DecorView 的管理者，它负责 View 树的测量、布局、绘制，以及通过 Choreographer 来控制 View 的刷新。  
 ![WPS图片-抠图](https://github.com/yaoxiangshangzou/Android-Notes/assets/20512625/58454c85-78b2-4a31-906c-523a2a74c81d)
 
-接下来就是正式绘制 View 了，从 performTraversals 开始，Measure、Layout、Draw 三步走。
+（接下来就是绘制 View 了）
+
+##### 绘制View流程  
+
+从 performTraversals 开始，Measure、Layout、Draw 三步走。
 
     Measure：测量视图宽高。 单一View:measure() -> onMeasure() -> getDefaultSize() 计算View的宽/高值 ->
     setMeasuredDimension存储测量后的View宽 / 高 ViewGroup: -> measure() -> 需要重写onMeasure( ViewGroup
@@ -35,6 +39,20 @@ View 的显示是以 Activity 为载体的，Activity 是在 ActivityThread 的 
     （Layer）；⑥、绘制View的装饰(例如滚动条等等)。
 
 完成这三步之后，会在 ActivityThread 的 handleResumeActivity 最后调用 Activity 的 makeVisible，这个方法就是将 DecorView 设置为可见状态。
+
+##### MeasureSpec是什么
+
+    MeasureSpec表示的是一个32位的整形值，它的高2位表示测量模式SpecMode，低30位表示某种测量模式下的
+    规格大小SpecSize。MeasureSpec是View类的一个静态内部类，用来说明应该如何测量这个View。它由三种测量模
+    式，如下：
+    EXACTLY：精确测量模式，视图宽高指定为match_parent或具体数值时生效，表示父视图已经决定了子视图的
+    精确大小，这种模式下View的测量值就是SpecSize的值。
+    AT_MOST：最大值测量模式，当视图的宽高指定为wrap_content时生效，此时子视图的尺寸可以是不超过父视
+    图允许的最大尺寸的任何尺寸。
+    UNSPECIFIED：不指定测量模式, 父视图没有限制子视图的大小，子视图可以是想要的任何尺寸，通常用于系统
+    内部，应用开发中很少用到。
+    MeasureSpec通过将SpecMode和SpecSize打包成一个int值来避免过多的对象内存分配，为了方便操作，其提
+    供了打包和解包的方法，打包方法为makeMeasureSpec，解包方法为getMode和getSize。
 
 WMS 是所有 Window 窗口的管理者，它负责 Window 的添加和删除、Surface 的管理和事件分发等等，因此每一个 Activity 中的 PhoneWindow 对象如果需要显示等操作，就需要要与 WMS 交互才能进行。这一步是在 ViewRootImpl 的 setView 方法中，会调用 requestLayout，并且通过 WindowSession 的 addToDisplay 与 WMS 进行交互，WMS 会为每一个 Window 关联一个 WindowState。除此之外，ViewRootImpl 的 setView 还做了一件重要的事就是注册 InputEventReceiver，这和 View 事件分发有关。
 
