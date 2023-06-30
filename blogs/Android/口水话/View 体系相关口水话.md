@@ -11,7 +11,30 @@ View 体系相关口水话
 
 #### View 绘制流程
 
-View 的显示是以 Activity 为载体的，Activity 是在 ActivityThread 的 performLaunchActivity 中进行创建的，在创建完成之后就会调用其 attach 方法，这个方法是优先于 onCreate、onStart 等生命周期函数的，attach 方法所做的就是 new 一个 PhoneWindow 并关联 WindowManager。接下来就是 onCreate 方法，这一步就是把我们的布局文件解析成 View 塞到 DecorView 的一个 id 为 R.id.content 的 mContentView 中。DecorView 本身是一个 FrameLayout，它还承载了 StatusBar 和 NavigationBar。然后在 handleResumeActivity 中，通过 WindowManagerImpl 的 addView 方法把 DecorView 添加进去，实际实现是 WindowManagerGlobal 的 addView 方法，它里面管理着所有的 DecorView 及其对应的 ViewRootImpl，ViewRootImpl 是 DecorView 的管理者，它负责 View 树的测量、布局、绘制，以及通过 Choreographer 来控制 View 的刷新。
+addView流程  
+  
+View 的显示是以 Activity 为载体的，Activity 是在 ActivityThread 的 performLaunchActivity 中进行创建的，在创建完成之后就会调用其 attach 方法，attach 方法所做的就是 new 一个 PhoneWindow 并关联 WindowManager。接下来就是 onCreate 方法，这一步就是把我们的布局文件解析成 View 塞到 DecorView 里的 mContentView 中。然后在 handleResumeActivity 中，通过 WindowManagerImpl 的 addView 方法把 DecorView 添加进去，实际实现是 WindowManagerGlobal 的 addView 方法，它里面管理着所有的 DecorView 及其对应的 ViewRootImpl，ViewRootImpl 是 DecorView 的管理者，它负责 View 树的测量、布局、绘制，以及通过 Choreographer 来控制 View 的刷新。  
+![WPS图片-抠图](https://github.com/yaoxiangshangzou/Android-Notes/assets/20512625/58454c85-78b2-4a31-906c-523a2a74c81d)
+
+接下来就是正式绘制 View 了，从 performTraversals 开始，Measure、Layout、Draw 三步走。
+
+    Measure：测量视图宽高。 单一View:measure() -> onMeasure() -> getDefaultSize() 计算View的宽/高值 ->
+    setMeasuredDimension存储测量后的View宽 / 高 ViewGroup: -> measure() -> 需要重写onMeasure( ViewGroup
+    没有定义测量的具体过程，因为ViewGroup是一个抽象类，其测量过程的onMeasure方法需要各个子类去实现。
+    如：LinearLayout、RelativeLayout、FrameLayout等等，这些控件的特性都是不一样的，测量规则自然也都不一
+    样。)遍历测量ViewGroup中所有的View -> 根据父容器的MeasureSpec和子View的LayoutParams等信息计算子
+    View的MeasureSpec -> 合并所有子View计算出ViewGroup的尺寸 -> setMeasuredDimension 存储测量后的宽 / 高
+    从顶层父View向子View的递归调用view.layout方法的过程，即父View根据上一步measure子View所得到的布局大小
+    和布局参数，将子View放在合适的位置上。
+    Layout：先通过 measure 测量出 ViewGroup 宽高，ViewGroup 再通过 layout 方法根据自身宽高来确定自身
+    位置。当 ViewGroup 的位置被确定后，就开始在 onLayout 方法中调用子元素的 layout 方法确定子元素的位置。子
+    元素如果是 ViewGroup 的子类，又开始执行 onLayout，如此循环往复，直到所有子元素的位置都被确定，整个
+    View 树的 layout 过程就执行完了。
+    Draw：绘制视图。ViewRoot创建一个Canvas对象，然后调用OnDraw()。六个步骤：①、绘制视图的背景；
+    ②、保存画布的图层（Layer）；③、绘制View的内容；④、绘制View子视图，如果没有就不用；⑤、还原图层
+    （Layer）；⑥、绘制View的装饰(例如滚动条等等)。
+
+完成这三步之后，会在 ActivityThread 的 handleResumeActivity 最后调用 Activity 的 makeVisible，这个方法就是将 DecorView 设置为可见状态。
 
 WMS 是所有 Window 窗口的管理者，它负责 Window 的添加和删除、Surface 的管理和事件分发等等，因此每一个 Activity 中的 PhoneWindow 对象如果需要显示等操作，就需要要与 WMS 交互才能进行。这一步是在 ViewRootImpl 的 setView 方法中，会调用 requestLayout，并且通过 WindowSession 的 addToDisplay 与 WMS 进行交互，WMS 会为每一个 Window 关联一个 WindowState。除此之外，ViewRootImpl 的 setView 还做了一件重要的事就是注册 InputEventReceiver，这和 View 事件分发有关。
 
@@ -19,15 +42,7 @@ WMS 是所有 Window 窗口的管理者，它负责 Window 的添加和删除、
 
 这就要回到前面所说的 ViewRootImpl 的 requestLayout 方法了，这个方法首先会 checkThread 检查是否是主线程，然后调用 scheduleTraversals 方法，这个方法首先会设置同步屏障，然后通过 Choreographer 在下一帧到来时去执行 doTraversal 方法。在 doTraversal 中调用 performTraversal 中真正进行 View 的绘制流程，即调用 performMeasure、performLayout、performDraw。不过在它们之前，会先调用 relayoutWindow 通过 WindowSession 与 WMS 进行交互，即把 Java 层创建的 Surface 与 Native 层的 Surface 关联起来。
 
-接下来就是正式绘制 View 了，从 performTraversals 开始，Measure、Layout、Draw 三步走。
 
-第一步是获取 DecorView 的宽高的 MeasureSpec 然后执行 performMeasure 流程。MeasureSpec 简单来说就是一个 int 值，高 2 位表示测量模式，低 30 位用来表示大小。测量模式有三种，EXACTLY、AT_MOST、UNSPECIFIED。EXACTLY 对应为 match_parent 和具体数值的情况，表示父容器已经确定 View 的大小；AT_MOST 对应 wrap_content，表示父容器规定 View 最大只能是 SpecSize；UNSPECIFIED 表示不限定测量模式，父容器不对 View 做任何限制，这种适用于系统内部。接着说，performMeasure 中会去调用 DecorView 的 measure 方法，这个是 View 里面的方法并且是 final 的，它里面会把参数透传给 onMeasure 方法，这个方法是可以重写的，也就是我们可以干预 View 的测量过程。在 onMeasure 中，会通过 getDefaultSize 获取到宽高的默认值，然后调用 setMeasureDimension 将获取的值进行设置。在 getDefaultSize 中，无论是 EXACTLY 还是 AT_MOST，都会返回 MeasureSpec 中的大小，这个 SpecSize 就是测量后的最终结果。至于 UNSPECIFIED 的情况，则会返回一个建议的最小值，这个值和子元素设置的最小值以及它的背景大小有关。从这个默认实现来看，如果我们自定义一个 View 不重写它的 onMeasure 方法，那么 warp_content 和 match_parent 一样。所以 DecorView 重写了 onMeasure 函数，它本身是一个 FrameLayout，所以最后也会调用到 FrameLayout 的 onMeasure 函数，作为一个 ViewGroup，都会遍历子 View 并调用子 View 的 measure 方法。这样便实现了层层递归调用到了每个子 View 的 onMeasure 方法进行测量。
-
-第二步是执行 performLayout 的流程，也就是调用到 DecorView 的 layout 方法，也就是 View 里面的方法，如果 View 大小发生变化，则会回调 onSizeChanged 方法，如果 View 状态发生变化，则会回调 onLayout 方法，这个方法在 View 中是空实现，因此需要看 DecorView 的父容器 FrameLayout 的 onLayout 方法，这个方法就是遍历子 View 调用其 layout 方法进行布局，子 View 的 layout 方法被调用的时候，它的 onLayout 方法又会被调用，这样就布局完了所有的 View。
-
-第三步就是 performDraw 方法了，里面会调用 drawSoftware 方法，这个方法需要先通过 mSurface lockCanvas 获取一个 Canvas 对象，作为参数传给 DecorView 的 draw 方法。这个方法调用的是 View 的 draw 方法，先绘制 View 背景，然后绘制 View 的内容，如果有子 View 则会调用子 View 的 draw 方法，层层递归调用，最终完成绘制。
-
-完成这三步之后，会在 ActivityThread 的 handleResumeActivity 最后调用 Activity 的 makeVisible，这个方法就是将 DecorView 设置为可见状态。
 
 #### View 事件分发
 
