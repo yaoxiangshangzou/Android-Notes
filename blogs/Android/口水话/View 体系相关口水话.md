@@ -64,7 +64,7 @@ WMS 是所有 Window 窗口的管理者，它负责 Window 的添加和删除、
 
 #### View 事件分发
 
-在最新的 Android 系统中，事件的处理者不再由 InputEventReceiver 独自承担，而是通过多种形式的 InputStage 来分别处理，它们都有一个回调接口 onProcess 函数，这些都声明在 ViewRootImpl 内部类里面，并且在 setView 里面进行注册，比如有 ViewPreImeInputStage 用于分发 KeyEvent，这里我们重点关注与 MotionEvent 事件分发相关的 ViewPostImeInputStage。在它的 onProcess 函数中，如果判断事件类型是 SOURCE_CLASS_POINTER，即触摸屏的 MotionEvent 事件，就会调用 mView 的 dispatchPointerEvent 方法处理。也就是说事件分发最开始是传递给 DecorView 的，DecorView 的 dispatchTouchEvent 是传给 Window Callback 接口方法 dispatchTouchEvent，而 Activity 实现了 Window Callback 接口，在 Activity 的 dispatchTouchEvent 方法里，是调到 Window 的 dispatchTouchEvent，Window 的唯一实现类 PhoneWindow 又会把这个事件回传给 DecorView，DecorView 在它的 superDispatchTouchEvent 把事件转交给了 ViewGroup。
+事件分发最开始是传递给 DecorView 的，DecorView 的 dispatchTouchEvent 是传给 Window Callback 接口方法 dispatchTouchEvent，而 Activity 实现了 Window Callback 接口，在 Activity 的 dispatchTouchEvent 方法里，是调到 Window 的 dispatchTouchEvent，Window 的唯一实现类 PhoneWindow 又会把这个事件回传给 DecorView，DecorView 在它的 superDispatchTouchEvent 把事件转交给了 ViewGroup。
 
 所以，事件分发的流程是：
 
@@ -72,7 +72,19 @@ WMS 是所有 Window 窗口的管理者，它负责 Window 的添加和删除、
 DecorView -> Activity -> PhoneWindow -> DecorView -> ViewGroup -> View
 ```
 
-这里面涉及了三个元素，Activity、ViewGroup 和 View。Activity 的 dispatchTouchEvent 前面说过，它的 dispatchTouchEvent 一般都是返回 false 不消费往下传；在说 View 的 dispatchTouchEvent，如果注册了 OnTouchListener 就调用其 onTouch 方法，如果 onTouch 返回 false 还会接着调用 onTouchEvent 函数，onTouchEvent 作为一种兜底方案，它在内部会根据 MotionEvent 的不同类型做相应处理，比如是 ACTION_UP 就需要执行 performClick 函数。ViewGroup 因为涉及对子 View 的处理，其派发流程没有 View 那么简单直接，它重写了 dispatchTouchEvent 方法，如果 ViewGroup 允许拦截，就调用其 onInterceptTouchEvent 来判断是否要真正执行拦截了，如果拦截了就交由自己的 onTouchEvent 处理，如果不拦截，就从后遍历子 View 处理，它有两个函数可以过滤子 View，一个是判断这个子 View 是否接受 Pointer Events 事件，另一个是判断落点有没有落在子 View 范围内。如果都满足，则调用其 dispatchTouchEvent 处理。如果该子 View 是一个 ViewGroup 就继续调用其 dispatchTouchEvent，否则就是 View 的 dispatchTouchEvent 方法，如此循环往复，直到事件真正被处理。
+这里面涉及了三个角色，Activity、ViewGroup 和 View。
+
+    1、Activity：只有分发dispatchTouchEvent和消费onTouchEvent两个方法。Activity 的 dispatchTouchEvent 前面说过，
+    它的 dispatchTouchEvent 一般都是返回 false 不消费往下传；
+    2 View 只有分发和消费两个方法。view的 dispatchTouchEvent，如果注册了 OnTouchListener 就调用其 onTouch 方法，
+    如果 onTouch 返回 false 还会接着调用 onTouchEvent 函数，onTouchEvent 作为一种兜底方案，它在内部会根据 MotionEvent 
+    的不同类型做相应处理，比如是 ACTION_UP 就需要执行 performClick 函数。
+    3 ViewGroup：拥有分发、拦截和消费三个方法。ViewGroup 因为涉及对子 View 的处理，其派发流程没有 View 那么简单直接，
+    它重写了 dispatchTouchEvent 方法，如果 ViewGroup 允许拦截，就调用其 onInterceptTouchEvent 来判断是否要真正执行拦
+    截了，如果拦截了就交由自己的 onTouchEvent 处理，如果不拦截，就从后遍历子 View 处理，它有两个函数可以过滤子 View，
+    一个是判断这个子 View 是否接受 Pointer Events 事件，另一个是判断落点有没有落在子 View 范围内。如果都满足，则调用
+    其 dispatchTouchEvent 处理。如果该子 View 是一个 ViewGroup 就继续调用其 dispatchTouchEvent，否则就是 View 的 
+    dispatchTouchEvent 方法，如此循环往复，直到事件真正被处理。
 
 伪代码表示为：
 
@@ -91,6 +103,8 @@ public boolean dispatchTouchEvent(MotionEvent event) {
 最后可以画一下这个图：
 
 ![](https://i.loli.net/2020/07/22/qgVSpUYRJP7ycrO.jpg)
+
+在最新的 Android 系统中，事件的处理者不再由 InputEventReceiver 独自承担，而是通过多种形式的 InputStage 来分别处理，它们都有一个回调接口 onProcess 函数，这些都声明在 ViewRootImpl 内部类里面，并且在 setView 里面进行注册，比如有 ViewPreImeInputStage 用于分发 KeyEvent，这里我们重点关注与 MotionEvent 事件分发相关的 ViewPostImeInputStage。在它的 onProcess 函数中，如果判断事件类型是 SOURCE_CLASS_POINTER，即触摸屏的 MotionEvent 事件，就会调用 mView 的 dispatchPointerEvent 方法处理。
 
 到这里基本上事件分发就讲完了，但是还可以扩展一下，事件到底是从哪里来的？
 
